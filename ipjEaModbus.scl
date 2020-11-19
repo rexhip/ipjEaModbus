@@ -1,0 +1,218 @@
+﻿FUNCTION_BLOCK "ipj"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT 
+      disconn : Bool;
+   END_VAR
+
+   VAR_OUTPUT 
+      len : USInt;   // Max length is 124
+      diError : Bool;   // Outside array length
+   END_VAR
+
+   VAR 
+      server {OriginalPartName := 'MB_SERVER'; LibVersion := '4.2'} : MB_SERVER;   // mb_server
+      connect {OriginalPartName := 'TCON_IP_v4'; LibVersion := '1.0'} : TCON_IP_v4;   // Connect parameters
+      data : Struct
+         header : Struct   // IPJ header
+            startFlag : Word := 16#A55A;
+            "version" : UInt := 2;   // Protocol version
+            numberOfReg_DI : UInt;   // Number of register with DI
+            numberOfReg_AI : UInt;   // Number of register with AI
+            numberOfReg_DO : UInt;   // Number of register with DO
+            numberOfReg_AO : UInt;   // Number of register with AO
+            reserved : Array[1..3] of Word;
+            scanNumber : UInt;
+         END_STRUCT;
+         di : Array[0..3] of Word;   // Digital inputs
+         ai : Array[0..7] of Word;   // Analog inputs
+         do : Struct   // Digital outputs
+            a { ExternalVisible := 'False'; ExternalWritable := 'False'} : Struct
+               b08 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [08]
+               b09 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [09]
+               b10 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [10]
+               b11 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [11]
+               b12 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [12]
+               b13 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [13]
+               b14 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [14]
+               b15 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [15]
+               b00 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [00]
+               b01 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [01]
+               b02_example_start_motor { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [02]
+               b03 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [03]
+               b04 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [04]
+               b05 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [05]
+               b06 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [06]
+               b07 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [07]
+            END_STRUCT;
+            b { ExternalVisible := 'False'; ExternalWritable := 'False'} : Struct
+               b08 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [08]
+               b09 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [09]
+               b10 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [10]
+               b11 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [11]
+               b12 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [12]
+               b13 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [13]
+               b14 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [14]
+               b15 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [15]
+               b00 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [00]
+               b01 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [01]
+               b02 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [02]
+               b03 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [03]
+               b04 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [04]
+               b05 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [05]
+               b06 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [06]
+               b07 { ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;   // [07]
+            END_STRUCT;
+         END_STRUCT;
+         ao : Struct   // Analog Outputs
+            w1 : Word;
+            w2 : Word;
+            w3 : Word;
+         END_STRUCT;
+      END_STRUCT;
+      log : Struct   // Debuggings information
+         readCnt : UDInt;
+         writeCnt : UDInt;
+         err { ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : UInt;
+      END_STRUCT;
+      z : Struct   // Internal vaiables
+         buffer : Array[0..250] of Byte;
+         err : Int;   // Error code
+         firstScan : Bool := true;
+         rtrig : Struct
+            dr : Bool;
+            ndr : Bool;
+         END_STRUCT;
+      END_STRUCT;
+      tdiscon {OriginalPartName := 'T_DISCON'; LibVersion := '2.1'} : TDISCON;
+   END_VAR
+
+   VAR_TEMP 
+      pos : DInt;   // Position inside buffer
+   END_VAR
+
+
+BEGIN
+	// IPJ EA modbus communication
+	
+	// Configuration:
+	
+	// Interface id: May be found inside system constants, sometimes need to be changed 
+	#connect.InterfaceId := "Local~PROFINET_interface_1";  
+	// Connection id: Unique for each tcp connection in the plc, may need to be changed
+	// if default is in use
+	#connect.ID := 42;
+	// Port: Standard modbus port is 502, should usually not need be changed
+	#connect.LocalPort := 502;
+	
+	// - #data.di and #data.ai is data going from the Siemens plc to the IPJ EA
+	//   #data.do and #data.ao is data going from the IPJ EA to the Siemens PLC
+	// - The arrays #di, #ai, #do and #ao may be extended if needed
+	// - Map data from the plc program to the vaiables bellow, eg:
+	//   #data.di[0].%X0 := "motor_running";  // Digital input
+	//   #data.ai[0] := "motor_current";      // Analog input
+	//   // Alternativ method for DI
+	//   #log.err += "ipjDi"(n := 4, val := "motor_running",  diArr := #data.di);
+	// - If #data.do or #data.ao are used, then assign logical names, eg:
+	//  "motor_start" := #data."do".a.b02_start_motor;
+	// - #data."do" most be a dividable by 16, like , 32, 48, 64 etc.
+	
+	
+	
+	
+	// =================================================================================
+	// Code bellow this line should normaly not be changed
+	
+	// License: MIT
+	// Author:  Ola Bjørnli
+	// Web:     https://github.com/rexhip/rexhip/ipjmb
+	
+	#data.header.scanNumber += 1;
+	IF #z.firstScan THEN
+	    #connect.ConnectionType := 11;
+	    // DI 
+	    #pos := 0;
+	    #z.err := Serialize(SRC_VARIABLE := #data.di, DEST_ARRAY => #z.buffer, POS := #pos);
+	    #data.header.numberOfReg_DI := DINT_TO_UINT(#pos + 1) / 2;
+	    // AI
+	    #pos := 0;
+	    #z.err := Serialize(SRC_VARIABLE := #data.ai, DEST_ARRAY => #z.buffer, POS := #pos);
+	    #data.header.numberOfReg_AI := DINT_TO_UINT(#pos + 1) / 2;
+	    // DO
+	    #pos := 0;
+	    #z.err := Serialize(SRC_VARIABLE := #data."do", DEST_ARRAY => #z.buffer, POS := #pos);
+	    #data.header.numberOfReg_DO := DINT_TO_UINT(#pos + 1) / 2;
+	    // AO
+	    #pos := 0;
+	    #z.err := Serialize(SRC_VARIABLE := #data.ao, DEST_ARRAY => #z.buffer, POS := #pos);
+	    #data.header.numberOfReg_AO := DINT_TO_UINT(#pos + 1) / 2;
+	END_IF;
+	#pos := 0; 
+	#z.err := Serialize(SRC_VARIABLE := #data, DEST_ARRAY => #z.buffer, POS := #pos);
+	#z.err := Deserialize(SRC_ARRAY := #z.buffer, DEST_VARIABLE => #data."do", POS := #pos);
+	#z.err := Deserialize(SRC_ARRAY := #z.buffer, DEST_VARIABLE => #data.ao, POS := #pos);
+	#len := DINT_TO_USINT(#pos / 2);
+	#z.firstScan := false;
+	
+	// STATUS 16#80A3 : 
+	// If a new download has taken place, and this block is re-initialize,
+	// then the mb_server block will output the error code saying that:
+	// "Attempt being made to re-establish an existing connection." The
+	// solution to this problem is to disconnect and then reconnect. It
+	// dosen't work to use disconnect input on the mb_client block.
+	#tdiscon(REQ := #server.STATUS = 16#80A3, ID := #connect.ID);
+	
+	// Modbus server
+	#server(DISCONNECT := #tdiscon.BUSY OR #disconn,
+	        MB_HOLD_REG := #z.buffer,
+	        CONNECT := #connect); 
+	
+	// Debugging / monitoring
+	#server.ERROR := #server.ERROR;
+	#server.STATUS := #server.STATUS;
+	#server.Connected := #server.Connected;
+	#server.DISCONNECT := #server.DISCONNECT;
+	#log.readCnt += BOOL_TO_UDINT(#server.DR AND NOT #z.rtrig.dr);
+	#log.writeCnt += BOOL_TO_UDINT(#server.NDR AND NOT #z.rtrig.ndr);
+	#z.rtrig.dr := #server.DR;
+	#z.rtrig.ndr := #server.NDR;
+	
+END_FUNCTION_BLOCK
+
+FUNCTION "ipjDi" : USInt
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT 
+      n : UInt;
+      val : Bool;   // Value
+   END_VAR
+
+   VAR_IN_OUT 
+      diArr : Array[*] of Word;
+   END_VAR
+
+   VAR_TEMP 
+      element : UInt;
+      mask : Word;
+   END_VAR
+
+
+BEGIN
+	// Write the value of one digital input to the #data.di array
+	
+	// Make sure that #data.di array is big enough.
+	
+	#element := DINT_TO_UINT(LOWER_BOUND(ARR := #diArr, DIM := 1) + #n / 16);
+	IF #element > UPPER_BOUND(ARR := #diArr, DIM := 1) THEN
+	    #ipjDi := 1; // Error handling, outside array limits
+	ELSE
+	    #ipjDi := 0;
+	    #mask := 16#01;
+	    #mask := SHL(IN := #mask, N := #n MOD 16);
+	    #diArr[#element] := SEL(G := #val,
+	                            IN0 := #diArr[#element] AND NOT #mask,
+	                            IN1 := #diArr[#element] OR #mask);
+	END_IF;
+	
+END_FUNCTION
+
